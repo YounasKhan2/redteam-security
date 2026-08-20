@@ -37,7 +37,7 @@ export default function NewScanWizard({
         setModules(ms);
         setSelected(ms.filter((m) => m.status !== 'Roadmap').map((m) => m.name));
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [open]);
 
   const groups = useMemo(() => {
@@ -131,13 +131,12 @@ export default function NewScanWizard({
           {STEPS.map((s, i) => (
             <div key={s.n} className="flex items-center gap-2">
               <div
-                className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
-                  step === s.n
-                    ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300'
-                    : step > s.n
-                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                      : 'border-white/10 text-slate-500'
-                }`}
+                className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${step === s.n
+                  ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300'
+                  : step > s.n
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : 'border-white/10 text-slate-500'
+                  }`}
               >
                 <s.icon className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{s.label}</span>
@@ -169,7 +168,7 @@ export default function NewScanWizard({
                 <input
                   value={targetUrl}
                   onChange={(e) => setTargetUrl(e.target.value)}
-                  placeholder="https://staging-api.example.com or http://127.0.0.1:5000"
+                  // placeholder="https://staging-api.example.com or http://127.0.0.1:5000"
                   className="w-full rounded-lg border border-white/10 bg-[#0a101c] px-3 py-2.5 font-mono text-sm text-white placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
                 />
               </div>
@@ -260,24 +259,22 @@ export default function NewScanWizard({
                           type="button"
                           disabled={disabled}
                           onClick={() => toggle(m.name)}
-                          className={`rounded-lg border p-3 text-left transition ${
-                            disabled
-                              ? 'cursor-not-allowed border-white/5 bg-white/[0.02] opacity-50'
-                              : checked
-                                ? 'border-cyan-500/50 bg-cyan-500/10'
-                                : 'border-white/10 bg-[#0a101c] hover:border-white/25'
-                          }`}
+                          className={`rounded-lg border p-3 text-left transition ${disabled
+                            ? 'cursor-not-allowed border-white/5 bg-white/[0.02] opacity-50'
+                            : checked
+                              ? 'border-cyan-500/50 bg-cyan-500/10'
+                              : 'border-white/10 bg-[#0a101c] hover:border-white/25'
+                            }`}
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-sm font-semibold text-white">{m.name}</span>
                             <span
-                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
-                                m.status === 'GA'
-                                  ? 'bg-emerald-500/15 text-emerald-300'
-                                  : m.status === 'Beta'
-                                    ? 'bg-amber-400/15 text-amber-300'
-                                    : 'bg-slate-500/15 text-slate-400'
-                              }`}
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${m.status === 'GA'
+                                ? 'bg-emerald-500/15 text-emerald-300'
+                                : m.status === 'Beta'
+                                  ? 'bg-amber-400/15 text-amber-300'
+                                  : 'bg-slate-500/15 text-slate-400'
+                                }`}
                             >
                               {m.status}
                             </span>

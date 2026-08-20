@@ -1,7 +1,7 @@
 ﻿import asyncio
 import httpx
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from database import supabase_admin
 
 from scanner.crawler import crawl_target_surface
@@ -13,6 +13,9 @@ from scanner.modules.rate_limiter import audit_rate_limiting
 from scanner.modules.sqli_scanner import audit_sql_injection
 from scanner.modules.ssrf_scanner import audit_ssrf
 from scanner.modules.bola_scanner import audit_two_tenant_bola
+
+# Global in-memory cache for discovered surfaces
+GLOBAL_SURFACES: Dict[int, Dict[str, Any]] = {}
 
 async def emit_event(scan_id: int, phase_key: str, level: str, message: str):
     if not supabase_admin:
@@ -73,6 +76,19 @@ async def run_scan(
             routes = surface["routes"]
             params = surface["parameters"]
             total_requests += 5
+
+            # Save into global surface store
+            GLOBAL_SURFACES[scan_id] = {
+                "scan_id": scan_id,
+                "target_url": target_url,
+                "total_routes": len(routes),
+                "total_params": len(params),
+                "routes": routes,
+                "parameters": params,
+                "forms": surface.get("forms", []),
+                "dynamic_routes": surface.get("dynamic_routes", []),
+                "discovered_at": datetime.utcnow().isoformat()
+            }
 
             await emit_event(scan_id, "p-plan", "AI", f"Surface mapped: {len(routes)} routes and {len(params)} parameters discovered")
             if supabase_admin:

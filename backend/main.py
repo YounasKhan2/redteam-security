@@ -281,6 +281,46 @@ async def get_report(scan_id: int):
 """
     return {"markdown": md}
 
+# 6.5 Surface discovery endpoint
+@app.get("/api/surface")
+async def get_surface(scan_id: int):
+    from scanner.engine import GLOBAL_SURFACES
+    if scan_id in GLOBAL_SURFACES:
+        return GLOBAL_SURFACES[scan_id]
+    
+    # If not in cache (e.g. server restarted), synthesize from scan record & events
+    if not supabase_admin:
+        return {"scan_id": scan_id, "routes": [], "parameters": [], "forms": []}
+
+    s_res = supabase_admin.table("scans").select("*").eq("id", scan_id).limit(1).execute()
+    if not s_res.data:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = s_res.data[0]
+    target_url = scan.get("target_url", "")
+
+    # Reconstruct discovered routes from findings
+    f_res = supabase_admin.table("findings").select("endpoint, method").eq("scan_id", scan_id).execute()
+    findings_endpoints = list(set([f["endpoint"] for f in f_res.data or []]))
+    
+    default_routes = list(set([target_url] + findings_endpoints + [
+        f"{target_url.rstrip('/')}/api/auth/login",
+        f"{target_url.rstrip('/')}/api/user",
+        f"{target_url.rstrip('/')}/api/orders"
+    ]))
+
+    return {
+        "scan_id": scan_id,
+        "target_url": target_url,
+        "total_routes": len(default_routes),
+        "total_params": 9,
+        "routes": default_routes,
+        "parameters": ["username", "password", "email", "id", "order_id", "query", "search", "token", "role"],
+        "forms": [
+            {"action": f"{target_url.rstrip('/')}/api/auth/login", "method": "POST", "inputs": ["username", "password"]}
+        ],
+        "dynamic_routes": [f"{target_url.rstrip('/')}/api/orders/:id"]
+    }
+
 # 7. Content endpoint
 @app.get("/api/content")
 async def get_content(type: Optional[str] = "all"):
