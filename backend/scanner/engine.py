@@ -11,6 +11,7 @@ from scanner.modules.auth_auditor import audit_auth_and_access
 from scanner.modules.rate_limiter import audit_rate_limiting
 from scanner.modules.sqli_scanner import audit_sql_injection
 from scanner.modules.ssrf_scanner import audit_ssrf
+from scanner.modules.bola_scanner import audit_two_tenant_bola
 
 async def emit_event(scan_id: int, phase_key: str, level: str, message: str):
     if not supabase_admin:
@@ -27,7 +28,13 @@ async def emit_event(scan_id: int, phase_key: str, level: str, message: str):
     except Exception as e:
         print(f"[WARN] Error emitting scan event: {e}")
 
-async def run_scan(scan_id: int, target_url: str, auth_headers: Dict[str, str] = None, modules: List[str] = None):
+async def run_scan(
+    scan_id: int, 
+    target_url: str, 
+    auth_headers: Dict[str, str] = None, 
+    tenant_b_auth_headers: Dict[str, str] = None,
+    modules: List[str] = None
+):
     print(f"[*] Starting active security sweep for Scan #{scan_id} -> {target_url}")
     
     # 1. Crawl & Surface Discovery
@@ -35,84 +42,93 @@ async def run_scan(scan_id: int, target_url: str, auth_headers: Dict[str, str] =
     if supabase_admin:
         supabase_admin.table("scans").update({"status": "running", "progress": 10}).eq("id", scan_id).execute()
 
-    headers = {
+    headers_a = {
         "User-Agent": "RedTeam-Adversarial-QA-Scanner/1.0",
         **(auth_headers or {})
+    }
+    
+    headers_b = {
+        "User-Agent": "RedTeam-Adversarial-QA-Scanner/1.0",
+        **(tenant_b_auth_headers or {"Authorization": "Bearer test_tenant_b_token_xyz987"})
     }
 
     all_findings = []
     total_requests = 0
 
-    async with httpx.AsyncClient(headers=headers, verify=False, follow_redirects=True) as client:
-        surface = await crawl_target_surface(target_url, client)
-        routes = surface["routes"]
-        params = surface["parameters"]
-        total_requests += 5
+    async with httpx.AsyncClient(headers=headers_a, verify=False, follow_redirects=True) as client_a:
+        async with httpx.AsyncClient(headers=headers_b, verify=False, follow_redirects=True) as client_b:
+            surface = await crawl_target_surface(target_url, client_a)
+            routes = surface["routes"]
+            params = surface["parameters"]
+            total_requests += 5
 
-        await emit_event(scan_id, "p-plan", "AI", f"Surface mapped: {len(routes)} routes and {len(params)} parameters discovered for testing")
-        if supabase_admin:
-            supabase_admin.table("scans").update({"progress": 25}).eq("id", scan_id).execute()
-        await asyncio.sleep(0.5)
+            await emit_event(scan_id, "p-plan", "AI", f"Surface mapped: {len(routes)} routes and {len(params)} parameters discovered for testing")
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 20}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
 
-        # Phase 1: Security Transport & Headers
-        await emit_event(scan_id, "p-headers", "EXEC", "Executing: Transport & Security Headers Audit (HSTS, CSP, CORS, Clickjacking)")
-        header_findings = await audit_security_headers(target_url, client, scan_id)
-        all_findings.extend(header_findings)
-        total_requests += 4
-        
-        if supabase_admin:
-            supabase_admin.table("scans").update({"progress": 40}).eq("id", scan_id).execute()
-        await asyncio.sleep(0.5)
+            # Phase 1: Security Transport & Headers
+            await emit_event(scan_id, "p-headers", "EXEC", "Executing: Transport & Security Headers Audit (HSTS, CSP, CORS, Clickjacking)")
+            header_findings = await audit_security_headers(target_url, client_a, scan_id)
+            all_findings.extend(header_findings)
+            total_requests += 4
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 35}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
 
-        # Phase 2: Boundary Fuzzing
-        await emit_event(scan_id, "p-inject", "EXEC", "Executing: Boundary Fuzzing & Unhandled 500 Error Probing")
-        fuzz_findings = await fuzz_boundaries(target_url, client, scan_id)
-        all_findings.extend(fuzz_findings)
-        total_requests += len(routes) * 5
-        
-        if supabase_admin:
-            supabase_admin.table("scans").update({"progress": 60}).eq("id", scan_id).execute()
-        await asyncio.sleep(0.5)
+            # Phase 2: Boundary Fuzzing
+            await emit_event(scan_id, "p-inject", "EXEC", "Executing: Boundary Fuzzing & Unhandled 500 Error Probing")
+            fuzz_findings = await fuzz_boundaries(target_url, client_a, scan_id)
+            all_findings.extend(fuzz_findings)
+            total_requests += len(routes) * 5
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 50}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
 
-        # Phase 3: Active SQL Injection
-        await emit_event(scan_id, "p-sqli", "EXEC", "Executing: Active SQL Injection Syntax & Error-Based Probes")
-        sqli_findings = await audit_sql_injection(routes, params, client, scan_id)
-        all_findings.extend(sqli_findings)
-        total_requests += 15
-        
-        if supabase_admin:
-            supabase_admin.table("scans").update({"progress": 75}).eq("id", scan_id).execute()
-        await asyncio.sleep(0.5)
+            # Phase 3: Active Two-Tenant BOLA / IDOR Testing
+            await emit_event(scan_id, "p-bola", "EXEC", "Executing: Two-Tenant BOLA / IDOR Cross-Account Isolation Test")
+            bola_findings = await audit_two_tenant_bola(target_url, routes, client_a, client_b, scan_id)
+            all_findings.extend(bola_findings)
+            total_requests += 15
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 65}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
 
-        # Phase 4: SSRF Probes
-        await emit_event(scan_id, "p-ssrf", "EXEC", "Executing: SSRF & Cloud Metadata Reachability Probes")
-        ssrf_findings = await audit_ssrf(routes, params, client, scan_id)
-        all_findings.extend(ssrf_findings)
-        total_requests += 10
-        
-        if supabase_admin:
-            supabase_admin.table("scans").update({"progress": 85}).eq("id", scan_id).execute()
-        await asyncio.sleep(0.5)
+            # Phase 4: Active SQL Injection
+            await emit_event(scan_id, "p-sqli", "EXEC", "Executing: Active SQL Injection Syntax & Error-Based Probes")
+            sqli_findings = await audit_sql_injection(routes, params, client_a, scan_id)
+            all_findings.extend(sqli_findings)
+            total_requests += 15
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 78}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
 
-        # Phase 5: Auth & Access Boundary
-        await emit_event(scan_id, "p-auth", "EXEC", "Executing: Authentication, JWT Integrity & Access Boundary Checks")
-        auth_findings = await audit_auth_and_access(target_url, client, scan_id)
-        all_findings.extend(auth_findings)
-        total_requests += 15
-        
-        if supabase_admin:
-            supabase_admin.table("scans").update({"progress": 90}).eq("id", scan_id).execute()
-        await asyncio.sleep(0.5)
+            # Phase 5: SSRF Probes
+            await emit_event(scan_id, "p-ssrf", "EXEC", "Executing: SSRF & Cloud Metadata Reachability Probes")
+            ssrf_findings = await audit_ssrf(routes, params, client_a, scan_id)
+            all_findings.extend(ssrf_findings)
+            total_requests += 10
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 88}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
 
-        # Phase 6: Rate Limiting & Exhaustion
-        await emit_event(scan_id, "p-rate", "EXEC", "Executing: Rate Limiting & High-Frequency Request Stress")
-        rate_findings = await audit_rate_limiting(target_url, client, scan_id)
-        all_findings.extend(rate_findings)
-        total_requests += 20
-        
-        if supabase_admin:
-            supabase_admin.table("scans").update({"progress": 95}).eq("id", scan_id).execute()
-        await asyncio.sleep(0.5)
+            # Phase 6: Auth & Access Boundary
+            await emit_event(scan_id, "p-auth", "EXEC", "Executing: Authentication, JWT Integrity & Access Boundary Checks")
+            auth_findings = await audit_auth_and_access(target_url, client_a, scan_id)
+            all_findings.extend(auth_findings)
+            total_requests += 15
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 94}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
+
+            # Phase 7: Rate Limiting & Exhaustion
+            await emit_event(scan_id, "p-rate", "EXEC", "Executing: Rate Limiting & High-Frequency Request Stress")
+            rate_findings = await audit_rate_limiting(target_url, client_a, scan_id)
+            all_findings.extend(rate_findings)
+            total_requests += 20
+            if supabase_admin:
+                supabase_admin.table("scans").update({"progress": 98}).eq("id", scan_id).execute()
+            await asyncio.sleep(0.4)
 
     # 4. Save Confirmed Findings into Database
     await emit_event(scan_id, "p-verify", "VERIFY", f"Verification complete — captured {len(all_findings)} confirmed findings")

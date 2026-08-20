@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -132,6 +132,7 @@ async def create_scan(req: ScanRequest, background_tasks: BackgroundTasks):
         scan_id=scan_id, 
         target_url=req.target_url, 
         auth_headers=req.auth_headers, 
+        tenant_b_auth_headers=req.tenant_b_auth_headers,
         modules=req.modules
     )
 

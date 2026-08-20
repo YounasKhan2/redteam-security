@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
-import { X, Crosshair, ListChecks, Rocket, Loader2, Lock } from 'lucide-react';
+﻿import { useEffect, useMemo, useState } from 'react';
+import { X, Crosshair, ListChecks, Rocket, Loader2, Lock, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import type { TestModule } from '../lib/types';
 
-const SPEC_TYPES = ['OpenAPI 3.x (Swagger)', 'Swagger 2.0', 'Postman Collection', 'HAR Archive'];
+const SPEC_TYPES = ['OpenAPI 3.x (Swagger)', 'Swagger 2.0', 'Postman Collection', 'HAR Archive', 'Auto-Discover (HTML + JS)'];
 const ENVIRONMENTS = ['staging', 'qa', 'pre-prod'];
 
 export default function NewScanWizard({
@@ -19,8 +19,10 @@ export default function NewScanWizard({
   const [modules, setModules] = useState<TestModule[]>([]);
   const [name, setName] = useState('');
   const [targetUrl, setTargetUrl] = useState('');
-  const [specType, setSpecType] = useState(SPEC_TYPES[0]);
+  const [specType, setSpecType] = useState(SPEC_TYPES[4]);
   const [environment, setEnvironment] = useState('staging');
+  const [tokenA, setTokenA] = useState('');
+  const [tokenB, setTokenB] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [launching, setLaunching] = useState(false);
@@ -58,8 +60,8 @@ export default function NewScanWizard({
         setError('Give this scan a name.');
         return;
       }
-      if (!/^https?:\/\/.+\..+/.test(targetUrl.trim())) {
-        setError('Enter a valid staging URL, e.g. https://staging-api.example.com');
+      if (!/^https?:\/\/.+/.test(targetUrl.trim())) {
+        setError('Enter a valid staging URL, e.g. https://staging-api.example.com or http://127.0.0.1:5000');
         return;
       }
       setError('');
@@ -78,6 +80,9 @@ export default function NewScanWizard({
     setLaunching(true);
     setError('');
     try {
+      const authHeaders = tokenA.trim() ? { Authorization: tokenA.trim().startsWith('Bearer ') ? tokenA.trim() : `Bearer ${tokenA.trim()}` } : undefined;
+      const tenantBHeaders = tokenB.trim() ? { Authorization: tokenB.trim().startsWith('Bearer ') ? tokenB.trim() : `Bearer ${tokenB.trim()}` } : undefined;
+
       const scan = await api<{ id: number }>('/api/scans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -87,6 +92,8 @@ export default function NewScanWizard({
           spec_type: specType,
           environment,
           modules: selected,
+          auth_headers: authHeaders,
+          tenant_b_auth_headers: tenantBHeaders,
         }),
       });
       onLaunched(scan.id);
@@ -162,14 +169,48 @@ export default function NewScanWizard({
                 <input
                   value={targetUrl}
                   onChange={(e) => setTargetUrl(e.target.value)}
-                  placeholder="https://staging-api.example.com"
+                  placeholder="https://staging-api.example.com or http://127.0.0.1:5000"
                   className="w-full rounded-lg border border-white/10 bg-[#0a101c] px-3 py-2.5 font-mono text-sm text-white placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
                 />
               </div>
+
+              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-cyan-300">
+                  <Users className="h-4 w-4" /> Two-Tenant BOLA / IDOR Testing (Optional)
+                </div>
+                <p className="mb-3 text-xs text-slate-400">
+                  Provide credentials for two test accounts to verify User A cannot read or mutate User B's resources.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-400">
+                      User A Token (Primary)
+                    </label>
+                    <input
+                      value={tokenA}
+                      onChange={(e) => setTokenA(e.target.value)}
+                      placeholder="Bearer eyJhbGciOi..."
+                      className="w-full rounded-lg border border-white/10 bg-[#0a101c] px-3 py-2 font-mono text-xs text-white placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-400">
+                      User B Token (Secondary)
+                    </label>
+                    <input
+                      value={tokenB}
+                      onChange={(e) => setTokenB(e.target.value)}
+                      placeholder="Bearer eyJhbGciOi..."
+                      className="w-full rounded-lg border border-white/10 bg-[#0a101c] px-3 py-2 font-mono text-xs text-white placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    API contract source
+                    Discovery mode / Spec
                   </label>
                   <select
                     value={specType}
@@ -261,6 +302,11 @@ export default function NewScanWizard({
                   <div><span className="text-slate-600">Env:</span> {environment}</div>
                   <div><span className="text-slate-600">Modules:</span> {selected.length}</div>
                 </div>
+                {(tokenA || tokenB) && (
+                  <div className="mt-3 border-t border-white/5 pt-2 text-xs text-cyan-300">
+                    ✓ Two-Tenant BOLA Isolation Testing Armed
+                  </div>
+                )}
               </div>
               <div className="rounded-xl border border-white/10 bg-[#0a101c] p-4">
                 <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Armed modules</p>

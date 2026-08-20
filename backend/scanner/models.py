@@ -7,8 +7,9 @@ class ScanRequest(BaseModel):
     target_url: str
     spec_type: str = "generic_url"
     environment: str = "staging"
-    modules: List[str] = Field(default_factory=lambda: ["p-auth", "p-rate", "p-inject", "p-logic", "p-ssrf"])
+    modules: List[str] = Field(default_factory=lambda: ["p-auth", "p-rate", "p-inject", "p-logic", "p-ssrf", "p-bola"])
     auth_headers: Optional[Dict[str, str]] = None
+    tenant_b_auth_headers: Optional[Dict[str, str]] = None
 
 class FindingCreate(BaseModel):
     scan_id: int
