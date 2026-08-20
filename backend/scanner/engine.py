@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from database import supabase_admin
 
 from scanner.crawler import crawl_target_surface
+from scanner.auto_auth import bootstrap_test_accounts
 from scanner.modules.security_headers import audit_security_headers
 from scanner.modules.boundary_fuzzing import fuzz_boundaries
 from scanner.modules.auth_auditor import audit_auth_and_access
@@ -35,36 +36,47 @@ async def run_scan(
     tenant_b_auth_headers: Dict[str, str] = None,
     modules: List[str] = None
 ):
-    print(f"[*] Starting active security sweep for Scan #{scan_id} -> {target_url}")
+    print(f"[*] Starting active autonomous security sweep for Scan #{scan_id} -> {target_url}")
     
     # 1. Crawl & Surface Discovery
     await emit_event(scan_id, "p-ingest", "INFO", f"Crawling HTML and client JS bundles for target: {target_url}")
     if supabase_admin:
         supabase_admin.table("scans").update({"status": "running", "progress": 10}).eq("id", scan_id).execute()
 
-    headers_a = {
-        "User-Agent": "RedTeam-Adversarial-QA-Scanner/1.0",
-        **(auth_headers or {})
-    }
-    
-    headers_b = {
-        "User-Agent": "RedTeam-Adversarial-QA-Scanner/1.0",
-        **(tenant_b_auth_headers or {"Authorization": "Bearer test_tenant_b_token_xyz987"})
-    }
-
     all_findings = []
     total_requests = 0
 
-    async with httpx.AsyncClient(headers=headers_a, verify=False, follow_redirects=True) as client_a:
-        async with httpx.AsyncClient(headers=headers_b, verify=False, follow_redirects=True) as client_b:
+    base_client = httpx.AsyncClient(verify=False, follow_redirects=True)
+    try:
+        # Autonomous Account Bootstrapping (if no custom tokens provided)
+        auto_a, auto_b = None, None
+        if not auth_headers:
+            await emit_event(scan_id, "p-auth-boot", "AI", "Checking for self-registration endpoint to auto-provision test accounts...")
+            auto_a, auto_b = await bootstrap_test_accounts(target_url, base_client)
+            if auto_a:
+                await emit_event(scan_id, "p-auth-boot", "INFO", "✓ Autonomously provisioned 2 ephemeral staging test accounts")
+
+        headers_a = {
+            "User-Agent": "RedTeam-Adversarial-QA-Scanner/1.0",
+            **(auth_headers or auto_a or {})
+        }
+        
+        headers_b = None
+        if tenant_b_auth_headers or auto_b:
+            headers_b = {
+                "User-Agent": "RedTeam-Adversarial-QA-Scanner/1.0",
+                **(tenant_b_auth_headers or auto_b)
+            }
+
+        async with httpx.AsyncClient(headers=headers_a, verify=False, follow_redirects=True) as client_a:
             surface = await crawl_target_surface(target_url, client_a)
             routes = surface["routes"]
             params = surface["parameters"]
             total_requests += 5
 
-            await emit_event(scan_id, "p-plan", "AI", f"Surface mapped: {len(routes)} routes and {len(params)} parameters discovered for testing")
+            await emit_event(scan_id, "p-plan", "AI", f"Surface mapped: {len(routes)} routes and {len(params)} parameters discovered")
             if supabase_admin:
-                supabase_admin.table("scans").update({"progress": 20}).eq("id", scan_id).execute()
+                supabase_admin.table("scans").update({"progress": 25}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
 
             # Phase 1: Security Transport & Headers
@@ -73,7 +85,7 @@ async def run_scan(
             all_findings.extend(header_findings)
             total_requests += 4
             if supabase_admin:
-                supabase_admin.table("scans").update({"progress": 35}).eq("id", scan_id).execute()
+                supabase_admin.table("scans").update({"progress": 40}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
 
             # Phase 2: Boundary Fuzzing
@@ -82,16 +94,21 @@ async def run_scan(
             all_findings.extend(fuzz_findings)
             total_requests += len(routes) * 5
             if supabase_admin:
-                supabase_admin.table("scans").update({"progress": 50}).eq("id", scan_id).execute()
+                supabase_admin.table("scans").update({"progress": 55}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
 
-            # Phase 3: Active Two-Tenant BOLA / IDOR Testing
-            await emit_event(scan_id, "p-bola", "EXEC", "Executing: Two-Tenant BOLA / IDOR Cross-Account Isolation Test")
-            bola_findings = await audit_two_tenant_bola(target_url, routes, client_a, client_b, scan_id)
-            all_findings.extend(bola_findings)
+            # Phase 3: Active Two-Tenant / Zero-Auth BOLA / IDOR Testing
+            await emit_event(scan_id, "p-bola", "EXEC", "Executing: BOLA / IDOR Object Isolation & Neighbor Mutation Probes")
+            if headers_b:
+                async with httpx.AsyncClient(headers=headers_b, verify=False, follow_redirects=True) as client_b:
+                    bola_findings = await audit_two_tenant_bola(target_url, routes, client_a, client_b, scan_id)
+                    all_findings.extend(bola_findings)
+            else:
+                bola_findings = await audit_two_tenant_bola(target_url, routes, client_a, None, scan_id)
+                all_findings.extend(bola_findings)
             total_requests += 15
             if supabase_admin:
-                supabase_admin.table("scans").update({"progress": 65}).eq("id", scan_id).execute()
+                supabase_admin.table("scans").update({"progress": 70}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
 
             # Phase 4: Active SQL Injection
@@ -100,7 +117,7 @@ async def run_scan(
             all_findings.extend(sqli_findings)
             total_requests += 15
             if supabase_admin:
-                supabase_admin.table("scans").update({"progress": 78}).eq("id", scan_id).execute()
+                supabase_admin.table("scans").update({"progress": 80}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
 
             # Phase 5: SSRF Probes
@@ -109,7 +126,7 @@ async def run_scan(
             all_findings.extend(ssrf_findings)
             total_requests += 10
             if supabase_admin:
-                supabase_admin.table("scans").update({"progress": 88}).eq("id", scan_id).execute()
+                supabase_admin.table("scans").update({"progress": 90}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
 
             # Phase 6: Auth & Access Boundary
@@ -118,7 +135,7 @@ async def run_scan(
             all_findings.extend(auth_findings)
             total_requests += 15
             if supabase_admin:
-                supabase_admin.table("scans").update({"progress": 94}).eq("id", scan_id).execute()
+                supabase_admin.table("scans").update({"progress": 95}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
 
             # Phase 7: Rate Limiting & Exhaustion
@@ -129,6 +146,8 @@ async def run_scan(
             if supabase_admin:
                 supabase_admin.table("scans").update({"progress": 98}).eq("id", scan_id).execute()
             await asyncio.sleep(0.4)
+    finally:
+        await base_client.aclose()
 
     # 4. Save Confirmed Findings into Database
     await emit_event(scan_id, "p-verify", "VERIFY", f"Verification complete — captured {len(all_findings)} confirmed findings")
