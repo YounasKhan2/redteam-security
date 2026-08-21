@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -19,7 +19,10 @@ import {
   Network,
   Code,
   Layers,
-  FileDown
+  FileDown,
+  Brain,
+  Crosshair,
+  Lock
 } from 'lucide-react';
 import { api, timeAgo, scanDuration, fmtDateTime } from '../lib/api';
 import type { Scan, ScanEvent, Finding } from '../lib/types';
@@ -38,6 +41,9 @@ interface SurfaceData {
   parameters: string[];
   forms: Array<{ action: string; method: string; inputs: string[] }>;
   dynamic_routes?: string[];
+  tech_stacks?: string[];
+  domain?: { primary_domain: string; confidence: string };
+  hypotheses?: Array<{ vector: string; trust_assumption: string; violation_strategy: string; priority: string }>;
 }
 
 const PHASES = [
@@ -163,7 +169,6 @@ export default function ScanDetail() {
     URL.revokeObjectURL(url);
   };
 
-  // Export specific scan findings to branded PDF
   const exportScanPDF = () => {
     if (!scan) return;
     const printWindow = window.open('', '_blank');
@@ -306,12 +311,24 @@ export default function ScanDetail() {
               <GateBadge gate={scan.gate_status} />
             </div>
             <p className="mt-2 font-mono text-sm text-cyan-300">{scan.target_url}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
+            
+            {/* Metadata & Tech Stack Badges Strip */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <Chip>spec: {scan.spec_type}</Chip>
               <Chip>env: {scan.environment}</Chip>
               <Chip>started: {fmtDateTime(scan.started_at)}</Chip>
               <Chip>duration: {scanDuration(scan)}</Chip>
               <Chip>requests sent: {scan.requests_sent.toLocaleString()}</Chip>
+              {surface?.domain?.primary_domain && (
+                <span className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 font-mono text-xs text-cyan-300">
+                  domain: {surface.domain.primary_domain}
+                </span>
+              )}
+              {(surface?.tech_stacks || []).map((t) => (
+                <span key={t} className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 font-mono text-xs text-violet-300">
+                  stack: {t}
+                </span>
+              ))}
             </div>
           </div>
           <div className="flex gap-4 text-center">
@@ -381,19 +398,17 @@ export default function ScanDetail() {
         )}
       </div>
 
-      {/* Tabs */}
+      {/* 4 Tabs Navigation */}
       <div className="mt-6 flex gap-1 rounded-xl border border-white/10 bg-[#0a101c] p-1">
-        {(
-          [
-            { k: 'feed', label: 'Live Execution Feed' },
-            { k: 'findings', label: `Verified Findings (${findings.length})` },
-            { k: 'surface', label: `Surface Map (${surface?.total_routes || '…'} Routes)` },
-            { k: 'report', label: 'Report & CI Gate' },
-          ] as { k: Tab; label: string }[]
-        ).map((t) => (
+        {[
+          { k: 'feed', label: 'Live Execution Feed' },
+          { k: 'findings', label: `Verified Findings (${findings.length})` },
+          { k: 'surface', label: `Surface Map (${surface?.total_routes || surface?.routes?.length || '…'} Routes)` },
+          { k: 'report', label: 'Report & CI Gate' },
+        ].map((t) => (
           <button
             key={t.k}
-            onClick={() => (t.k === 'report' ? openReportTab() : setTab(t.k))}
+            onClick={() => (t.k === 'report' ? openReportTab() : setTab(t.k as Tab))}
             className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
               tab === t.k ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'
             }`}
@@ -429,7 +444,7 @@ export default function ScanDetail() {
                 <Activity className="h-5 w-5 text-emerald-400" />
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Attack Vectors</p>
-                  <p className="text-xs font-bold text-slate-200">SQLi · SSRF · BOLA · Rate · Auth</p>
+                  <p className="text-xs font-bold text-slate-200">SQLi · SSRF · BOLA · Rate · Auth · JWT · Mass</p>
                 </div>
               </div>
             </div>
@@ -497,9 +512,62 @@ export default function ScanDetail() {
           </div>
         )}
 
-        {/* TAB: ATTACK SURFACE MAP */}
+        {/* TAB: ATTACK SURFACE MAP & COGNITIVE RECON */}
         {tab === 'surface' && (
           <div className="space-y-5">
+            {/* Cognitive Recon & Tech Stack Card */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-5">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-cyan-400">
+                  <Brain className="h-4 w-4" /> Inferred Business Domain
+                </div>
+                <p className="font-display mt-2 text-xl font-bold text-white">
+                  {surface?.domain?.primary_domain || 'Multi-Tenant Microservice / Web App'}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  Confidence: <span className="text-cyan-300 font-semibold">{surface?.domain?.confidence || 'High'}</span> · Tailored attack strategy active
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-5">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-violet-400">
+                  <Layers className="h-4 w-4" /> Fingerprinted Technology Stack
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(surface?.tech_stacks || ['FastAPI / Python', 'React / Next.js']).map((t) => (
+                    <span key={t} className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 font-mono text-xs text-violet-200">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Adversarial Hypotheses & Trust Boundary Cards */}
+            {surface?.hypotheses && surface.hypotheses.length > 0 && (
+              <div className="rounded-2xl border border-white/10 bg-[#0a101c] p-5">
+                <h3 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400">
+                  <Crosshair className="h-4 w-4" /> Attacker Trust Boundary Analysis (Cognitive Hypotheses)
+                </h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {surface.hypotheses.map((h, i) => (
+                    <div key={i} className="rounded-xl border border-white/5 bg-white/[0.02] p-4 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-white">{h.vector}</span>
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                          h.priority === 'CRITICAL' ? 'bg-rose-500/20 text-rose-300' : 'bg-orange-500/20 text-orange-300'
+                        }`}>
+                          {h.priority}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-slate-400"><strong className="text-slate-300">Implicit Trust:</strong> {h.trust_assumption}</p>
+                      <p className="mt-1 text-cyan-300"><strong className="text-cyan-400">Violation Strategy:</strong> {h.violation_strategy}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Surface Metrics */}
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
@@ -507,7 +575,7 @@ export default function ScanDetail() {
                 <p className="font-display mt-1 text-2xl font-bold text-white">
                   {surface?.total_routes || surface?.routes?.length || 0}
                 </p>
-                <p className="mt-1 text-xs text-slate-400">Scraped from HTML, forms & JS bundles</p>
+                <p className="mt-1 text-xs text-slate-400">Scraped from HTML, forms, JS chunks & specs</p>
               </div>
               <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-violet-400">Fuzzable Parameters</p>

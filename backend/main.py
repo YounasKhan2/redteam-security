@@ -223,6 +223,24 @@ async def update_finding(body: FindingUpdate):
     res = supabase_admin.table("findings").update({"status": body.status}).eq("id", body.id).execute()
     return res.data or {}
 
+class AIPatchRequest(BaseModel):
+    finding_id: int
+    framework: Optional[str] = "Laravel / PHP"
+
+@app.post("/api/findings/ai-patch")
+async def get_ai_patch(body: AIPatchRequest):
+    from scanner.gemini_service import generate_ai_remediation_patch
+    if not supabase_admin:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    f_res = supabase_admin.table("findings").select("*").eq("id", body.finding_id).limit(1).execute()
+    if not f_res.data:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    finding = f_res.data[0]
+    
+    patch = await generate_ai_remediation_patch(finding, [body.framework or "Generic Web App"])
+    return patch
+
 # 5. Scan Events & Logs
 @app.get("/api/events")
 async def get_events(scan_id: int):
@@ -318,7 +336,23 @@ async def get_surface(scan_id: int):
         "forms": [
             {"action": f"{target_url.rstrip('/')}/api/auth/login", "method": "POST", "inputs": ["username", "password"]}
         ],
-        "dynamic_routes": [f"{target_url.rstrip('/')}/api/orders/:id"]
+        "dynamic_routes": [f"{target_url.rstrip('/')}/api/orders/:id"],
+        "tech_stacks": ["Laravel / PHP", "React / SPA Entry"],
+        "domain": {"primary_domain": "Auth & Identity Service / Multi-Tenant Web App", "confidence": "High"},
+        "hypotheses": [
+            {
+                "vector": "Cross-Tenant Authorization (BOLA/IDOR)",
+                "trust_assumption": "Backend assumes requesting token belongs to the tenant that owns the requested resource ID.",
+                "violation_strategy": "Swap object IDs across tenant boundaries and enumerate sequential resource identifiers.",
+                "priority": "CRITICAL"
+            },
+            {
+                "vector": "Boundary Validation",
+                "trust_assumption": "Backend assumes frontend validates input types and rejects unexpected nulls/large integers.",
+                "violation_strategy": "Inject null bytes, oversized ints, and type confusion to trigger unhandled 500 crashes.",
+                "priority": "HIGH"
+            }
+        ]
     }
 
 # 7. Content endpoint

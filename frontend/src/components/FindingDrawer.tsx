@@ -1,130 +1,165 @@
-﻿import { useState } from 'react';
-import { 
-  X, Copy, Check, CheckCircle2, XCircle, RotateCcw, Crosshair, 
-  Terminal, ShieldAlert, Code2, FileText, AlertTriangle, ArrowRight
+import { useState, useMemo } from 'react';
+import {
+  X,
+  Copy,
+  Check,
+  RotateCcw,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Code,
+  Terminal,
+  FileCode,
+  Crosshair,
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 import type { Finding } from '../lib/types';
-import { SEV_META, cvssColor } from '../lib/api';
-import { SeverityBadge, FindingStatusBadge, Chip } from './Badges';
+import { SeverityBadge, FindingStatusBadge } from './Badges';
+import { api } from '../lib/api';
 
-type DrawerTab = 'overview' | 'curl' | 'remediation';
+interface FindingDrawerProps {
+  finding: Finding | null;
+  scanName?: string;
+  onClose: () => void;
+  onSetStatus?: (id: number, status: string) => Promise<void>;
+}
+
+const FRAMEWORKS = [
+  'Laravel / PHP',
+  'FastAPI / Python',
+  'Next.js / React',
+  'Express / Node.js',
+  'Django / Python',
+  'Go / Gin',
+  'Spring Boot / Java'
+];
 
 export default function FindingDrawer({
   finding,
   scanName,
   onClose,
   onSetStatus,
-}: {
-  finding: Finding | null;
-  scanName?: string;
-  onClose: () => void;
-  onSetStatus?: (id: number, status: string) => Promise<void> | void;
-}) {
-  const [activeTab, setActiveTab] = useState<DrawerTab>('overview');
+}: FindingDrawerProps) {
+  const [activeTab, setActiveTab] = useState<'overview' | 'curl' | 'remediation'>('overview');
   const [copied, setCopied] = useState(false);
+  const [copiedSecure, setCopiedSecure] = useState(false);
   const [busy, setBusy] = useState(false);
+  
+  // Gemini AI Code Patch State
+  const [selectedFramework, setSelectedFramework] = useState('Laravel / PHP');
+  const [aiPatchLoading, setAiPatchLoading] = useState(false);
+  const [aiPatch, setAiPatch] = useState<{
+    language?: string;
+    root_cause?: string;
+    vulnerable_code?: string;
+    secure_code?: string;
+  } | null>(null);
 
   if (!finding) return null;
-  const m = SEV_META[finding.severity] || SEV_META.low;
-  const cvss = Number(finding.cvss);
 
   const copyCurl = async () => {
     try {
       await navigator.clipboard.writeText(finding.curl);
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
-    } catch {
-      /* clipboard unavailable */
+    } catch {}
+  };
+
+  const copySecureFix = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedSecure(true);
+      setTimeout(() => setCopiedSecure(false), 1600);
+    } catch {}
+  };
+
+  const requestAiPatch = async (framework: string) => {
+    setSelectedFramework(framework);
+    setAiPatchLoading(true);
+    try {
+      const data = await api<{
+        language: string;
+        root_cause: string;
+        vulnerable_code: string;
+        secure_code: string;
+      }>('/api/findings/ai-patch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          finding_id: finding.id,
+          framework: framework
+        })
+      });
+      setAiPatch(data);
+    } catch (e) {
+      console.error('Failed to generate AI patch:', e);
+    } finally {
+      setAiPatchLoading(false);
     }
   };
 
-  const setStatus = async (status: string) => {
+  const setStatus = async (s: string) => {
     if (!onSetStatus) return;
     setBusy(true);
     try {
-      await onSetStatus(finding.id, status);
+      await onSetStatus(finding.id, s);
     } finally {
       setBusy(false);
     }
   };
 
-  // Generate a sample before/after code diff based on finding category
-  const generateCodeDiff = () => {
-    if (finding.title.toLowerCase().includes('sql') || finding.cwe === 'CWE-89') {
-      return {
-        lang: 'python',
-        vulnerable: `# Vulnerable: Dynamic string concatenation\nquery = f"SELECT * FROM items WHERE search = '{search}'"\ndb.execute(query)`,
-        secure: `# Secure Fix: Parameterized query\nquery = "SELECT * FROM items WHERE search = :search"\ndb.execute(query, {"search": search})`
-      };
-    }
-    if (finding.title.toLowerCase().includes('bola') || finding.title.toLowerCase().includes('idor') || finding.cwe === 'CWE-639') {
-      return {
-        lang: 'typescript',
-        vulnerable: `// Vulnerable: Fetches record without tenant check\nconst order = await db.order.findUnique({\n  where: { id: req.params.id }\n});\nreturn res.json(order);`,
-        secure: `// Secure Fix: Enforce tenant ownership at query level\nconst order = await db.order.findFirst({\n  where: {\n    id: req.params.id,\n    tenantId: req.user.tenantId\n  }\n});\nif (!order) return res.status(404).json({ error: 'Not found' });\nreturn res.json(order);`
-      };
-    }
-    if (finding.title.toLowerCase().includes('rate limit') || finding.cwe === 'CWE-799') {
-      return {
-        lang: 'typescript',
-        vulnerable: `// Vulnerable: Unthrottled login endpoint\napp.post('/api/auth/login', async (req, res) => {\n  return handleLogin(req, res);\n});`,
-        secure: `// Secure Fix: Apply Redis rate limiter middleware\nconst loginLimiter = rateLimit({\n  windowMs: 60 * 1000, // 1 minute\n  max: 5, // max 5 attempts\n  message: { error: 'Too many login attempts. Retry in 60s.' }\n});\napp.post('/api/auth/login', loginLimiter, handleLogin);`
-      };
-    }
-    if (finding.title.toLowerCase().includes('500') || finding.cwe === 'CWE-754') {
-      return {
-        lang: 'typescript',
-        vulnerable: `// Vulnerable: Unvalidated null inputs cause runtime crash\nconst { username, password } = req.body;\nconst user = await auth(username.toLowerCase(), password);`,
-        secure: `// Secure Fix: Schema validation with Zod / global error handler\nconst loginSchema = z.object({\n  username: z.string().min(1),\n  password: z.string().min(1)\n});\nconst result = loginSchema.safeParse(req.body);\nif (!result.success) return res.status(400).json({ error: 'Invalid input' });`
-      };
-    }
-    return {
-      lang: 'text',
-      vulnerable: `# Current implementation allows insecure request\n${finding.endpoint}`,
-      secure: `# Secure implementation:\n${finding.remediation}`
-    };
+  const cvss = Number(finding.cvss);
+  const cvssColor = (score: number) => {
+    if (score >= 9.0) return 'text-rose-400';
+    if (score >= 7.0) return 'text-orange-400';
+    if (score >= 4.0) return 'text-amber-300';
+    return 'text-sky-400';
   };
 
-  const diff = generateCodeDiff();
+  // Fallback static diff
+  const staticDiff = {
+    vulnerable: `// Insecure route handler on ${finding.endpoint}\napp.get('${finding.endpoint}', (req, res) => {\n  const data = db.query("SELECT * FROM items WHERE id = " + req.params.id);\n  res.json(data);\n});`,
+    secure: `// Secure parameterized validation\napp.get('${finding.endpoint}', authenticate, async (req, res) => {\n  const data = await prisma.items.findFirst({\n    where: { id: req.params.id, userId: req.user.id }\n  });\n  if (!data) return res.status(404).json({ error: 'Not found' });\n  res.json(data);\n});`
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm transition-opacity" onClick={onClose} />
-      <aside className="relative flex h-full w-full max-w-2xl flex-col border-l border-white/10 bg-[#070b13] shadow-2xl">
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm transition-opacity">
+      <div className="flex-1" onClick={onClose} />
+      <aside className="relative flex h-full w-full max-w-2xl flex-col border-l border-white/10 bg-[#060a12] text-slate-100 shadow-2xl">
         {/* Header */}
         <div className="border-b border-white/10 p-5">
           <div className="flex items-start justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <SeverityBadge severity={finding.severity} score={cvss} />
-              <FindingStatusBadge status={finding.status} />
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <SeverityBadge severity={finding.severity} score={cvss} />
+                <FindingStatusBadge status={finding.status} />
+                <span className="font-mono text-xs text-slate-400">
+                  {finding.cwe} · OWASP {finding.owasp}
+                </span>
+              </div>
+              <h2 className="font-display text-lg font-bold text-white">{finding.title}</h2>
+              {scanName && <p className="text-xs text-slate-500">From scan: {scanName}</p>}
             </div>
             <button
               onClick={onClose}
-              className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:bg-white/5 hover:text-white"
-              aria-label="Close"
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white"
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5" />
             </button>
           </div>
-          <h2 className="font-display mt-3 text-xl font-bold leading-snug text-white">{finding.title}</h2>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Chip>{finding.cwe}</Chip>
-            <Chip>OWASP {finding.owasp}</Chip>
-            <Chip>{finding.category}</Chip>
-            {scanName && <Chip>run: {scanName}</Chip>}
-          </div>
 
-          {/* Navigation Tabs */}
-          <div className="mt-5 flex gap-1 rounded-xl border border-white/10 bg-[#0a101c] p-1">
+          {/* 3-Tab Selector */}
+          <div className="mt-4 flex gap-1 rounded-xl border border-white/10 bg-[#0a101c] p-1 text-xs font-semibold">
             {[
-              { id: 'overview', label: 'Overview & Evidence', icon: FileText },
+              { id: 'overview', label: 'Overview & Evidence', icon: Crosshair },
               { id: 'curl', label: 'Reproduction (cURL)', icon: Terminal },
-              { id: 'remediation', label: 'AI Code Patch', icon: Code2 },
+              { id: 'remediation', label: 'AI Code Patch (Gemini)', icon: Sparkles },
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as DrawerTab)}
-                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 transition ${
                   activeTab === tab.id
                     ? 'bg-cyan-500/15 text-cyan-300 shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
@@ -184,7 +219,7 @@ export default function FindingDrawer({
                 <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">
                   Raw Verification Evidence
                 </h3>
-                <div className={`rounded-xl border p-4 font-mono text-xs leading-relaxed text-slate-300 ${m.border} ${m.bg}`}>
+                <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 font-mono text-xs leading-relaxed text-rose-200">
                   {finding.evidence}
                 </div>
               </section>
@@ -218,33 +253,75 @@ export default function FindingDrawer({
             </div>
           )}
 
-          {/* TAB 3: CODE REMEDIATION & DIFF */}
+          {/* TAB 3: AI CODE REMEDIATION & DIFF (GEMINI POWERED) */}
           {activeTab === 'remediation' && (
             <div className="space-y-4">
-              <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Remediation Strategy</h4>
-                <p className="mt-1.5 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4 text-xs leading-relaxed text-slate-300">
-                  {finding.remediation}
-                </p>
+              {/* Framework Selector Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#0a101c] p-3">
+                <div>
+                  <span className="text-xs font-bold text-slate-300">Target Framework:</span>
+                  <p className="text-[11px] text-slate-500">Select language/stack for Gemini code patch</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={selectedFramework}
+                    onChange={(e) => setSelectedFramework(e.target.value)}
+                    className="rounded-lg border border-white/10 bg-[#060a12] px-3 py-1.5 text-xs font-semibold text-cyan-300 focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                  >
+                    {FRAMEWORKS.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    disabled={aiPatchLoading}
+                    onClick={() => requestAiPatch(selectedFramework)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/20 px-3 py-1.5 text-xs font-bold text-cyan-300 hover:bg-cyan-500/30 disabled:opacity-50"
+                  >
+                    {aiPatchLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    {aiPatchLoading ? 'Generating...' : 'Generate Fix'}
+                  </button>
+                </div>
               </div>
 
-              <div>
-                <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Suggested Code Patch (Before vs. After)
-                </h4>
-                <div className="space-y-3">
-                  <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
-                    <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-rose-400">❌ Before (Vulnerable)</p>
-                    <pre className="overflow-x-auto font-mono text-xs text-slate-300">
-                      {diff.vulnerable}
-                    </pre>
+              {/* Root Cause Analysis Card */}
+              {aiPatch?.root_cause && (
+                <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                  <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-cyan-400">
+                    <Sparkles className="h-3.5 w-3.5" /> Root Cause Analysis
+                  </h4>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">{aiPatch.root_cause}</p>
+                </div>
+              )}
+
+              {/* Code Diff Before vs After */}
+              <div className="space-y-3">
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-4">
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-rose-400">
+                    ❌ Insecure Pattern ({selectedFramework})
+                  </p>
+                  <pre className="overflow-x-auto font-mono text-xs leading-relaxed text-slate-300">
+                    {aiPatch?.vulnerable_code || staticDiff.vulnerable}
+                  </pre>
+                </div>
+
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
+                      ✅ Production-Ready Secure Fix ({selectedFramework})
+                    </p>
+                    <button
+                      onClick={() => copySecureFix(aiPatch?.secure_code || staticDiff.secure)}
+                      className="inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
+                    >
+                      {copiedSecure ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                      {copiedSecure ? 'Copied' : 'Copy Code'}
+                    </button>
                   </div>
-                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
-                    <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-emerald-400">✅ After (Secure Fix)</p>
-                    <pre className="overflow-x-auto font-mono text-xs text-slate-200">
-                      {diff.secure}
-                    </pre>
-                  </div>
+                  <pre className="overflow-x-auto font-mono text-xs leading-relaxed text-emerald-200">
+                    {aiPatch?.secure_code || staticDiff.secure}
+                  </pre>
                 </div>
               </div>
             </div>

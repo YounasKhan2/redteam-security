@@ -1,4 +1,5 @@
 ﻿import re
+import json
 import httpx
 from urllib.parse import urljoin, urlparse
 from typing import Dict, List, Set, Any
@@ -8,14 +9,29 @@ SCRIPT_TAG_REGEX = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNOREC
 FORM_REGEX = re.compile(r'<form[^>]*action=["\']([^"\']*)["\'][^>]*method=["\']?([a-zA-Z]+)?["\']?[^>]*>(.*?)</form>', re.DOTALL | re.IGNORECASE)
 INPUT_NAME_REGEX = re.compile(r'<input[^>]+name=["\']([^"\']+)["\']', re.IGNORECASE)
 A_HREF_REGEX = re.compile(r'<a[^>]+href=["\']([^"\'#]+)["\']', re.IGNORECASE)
-
-# Pattern to detect numerical IDs or UUIDs in route paths (e.g. /orders/1042 or /teams/a1b2-c3d4)
 PATH_PARAM_REGEX = re.compile(r'/(?:[0-9]+|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', re.IGNORECASE)
+
+OPENAPI_ENDPOINTS = [
+    "/openapi.json",
+    "/swagger.json",
+    "/v2/api-docs",
+    "/v3/api-docs",
+    "/api-docs",
+    "/docs",
+    "/api/docs"
+]
+
+GRAPHQL_INTROSPECTION_QUERY = {
+    "query": "{ __schema { types { name fields { name } } } }"
+}
 
 async def crawl_target_surface(target_url: str, client: httpx.AsyncClient) -> Dict[str, Any]:
     """
-    Crawls target HTML, follows internal links, extracts forms, and parses client JS bundles.
-    Works for any worldwide web project without needing OpenAPI specs.
+    Advanced Universal Surface Crawler:
+    1. HTML Links, Forms & Input extraction
+    2. Client-Side JavaScript bundle decompilation
+    3. Automated OpenAPI / Swagger schema discovery & parsing
+    4. GraphQL endpoint & introspection detection
     """
     discovered_routes: Set[str] = set()
     discovered_forms: List[Dict[str, Any]] = []
@@ -23,6 +39,7 @@ async def crawl_target_surface(target_url: str, client: httpx.AsyncClient) -> Di
     dynamic_param_routes: List[str] = []
 
     base_domain = urlparse(target_url).netloc
+    base_url = target_url.rstrip("/")
 
     # Default probe routes
     discovered_routes.update([
@@ -36,11 +53,41 @@ async def crawl_target_surface(target_url: str, client: httpx.AsyncClient) -> Di
         urljoin(target_url, "/api/orders")
     ])
 
+    # Step 1: Check for OpenAPI / Swagger specifications
+    for spec_path in OPENAPI_ENDPOINTS:
+        spec_url = urljoin(target_url, spec_path)
+        try:
+            res = await client.get(spec_url, timeout=4.0)
+            if res.status_code == 200:
+                try:
+                    spec_data = res.json()
+                    if isinstance(spec_data, dict) and ("paths" in spec_data or "swagger" in spec_data or "openapi" in spec_data):
+                        paths = spec_data.get("paths", {})
+                        for p in paths.keys():
+                            discovered_routes.add(urljoin(target_url, p))
+                        print(f"[Crawler] Successfully ingested {len(paths)} routes from OpenAPI spec: {spec_url}")
+                except Exception:
+                    pass
+        except Exception:
+            continue
+
+    # Step 2: Check for GraphQL endpoint
+    for gql_path in ["/graphql", "/api/graphql"]:
+        gql_url = urljoin(target_url, gql_path)
+        try:
+            res = await client.post(gql_url, json=GRAPHQL_INTROSPECTION_QUERY, timeout=4.0)
+            if res.status_code == 200 and "__schema" in res.text:
+                discovered_routes.add(gql_url)
+                print(f"[Crawler] Discovered GraphQL schema at {gql_url}")
+        except Exception:
+            continue
+
+    # Step 3: Crawl HTML & Extract Forms / Links
     try:
         res = await client.get(target_url, timeout=8.0)
         html = res.text
 
-        # 1. Extract Forms & Input Fields
+        # Extract Forms
         for action, method, form_body in FORM_REGEX.findall(html):
             method = (method or "POST").upper()
             action_url = urljoin(target_url, action) if action else target_url
@@ -53,7 +100,7 @@ async def crawl_target_surface(target_url: str, client: httpx.AsyncClient) -> Di
             discovered_routes.add(action_url)
             discovered_params.update(inputs)
 
-        # 2. Extract Internal HTML Links
+        # Extract Links
         for href in A_HREF_REGEX.findall(html):
             if not href.startswith(("mailto:", "tel:", "javascript:")):
                 full_link = urljoin(target_url, href)
@@ -62,9 +109,9 @@ async def crawl_target_surface(target_url: str, client: httpx.AsyncClient) -> Di
                     if PATH_PARAM_REGEX.search(href):
                         dynamic_param_routes.append(full_link)
 
-        # 3. Extract & Parse JavaScript Bundles (React, Vite, Next.js chunks)
+        # Extract & Parse JavaScript Bundles
         script_srcs = SCRIPT_TAG_REGEX.findall(html)
-        for src in script_srcs[:8]:
+        for src in script_srcs[:10]:
             js_url = urljoin(target_url, src)
             try:
                 js_res = await client.get(js_url, timeout=6.0)
